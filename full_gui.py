@@ -206,6 +206,121 @@ def run_batch_analysis(industry, db_obj):
     except Exception as e:
         return f"❌ 批次分析錯誤: {str(e)}"
 
+def run_specific_stocks_batch(action_type, db_obj):
+    """批次分析指定的49檔股票"""
+    if not db_obj:
+        return "❌ 資料庫未連接，無法執行批次分析"
+    
+    try:
+        from batch_specific_stocks import optimize_specific_stocks, check_available_stocks
+        
+        if action_type == "檢查可用股票":
+            return check_available_stocks()
+        elif action_type == "開始批次優化":
+            return optimize_specific_stocks()
+        else:
+            return "❌ 無效的操作類型"
+    except ImportError:
+        return "❌ 指定股票批次分析模組未找到"
+    except Exception as e:
+        return f"❌ 指定股票批次分析錯誤: {str(e)}"
+
+def run_fast_batch_optimization(speed_mode, use_parallel, db_obj):
+    """執行快速批次優化"""
+    if not db_obj:
+        return "❌ 資料庫未連接，無法執行快速批次優化"
+    
+    try:
+        from fast_batch_optimizer import optimize_specific_stocks_fast
+        
+        max_workers = 4 if use_parallel else 1
+        return optimize_specific_stocks_fast(
+            speed_mode=speed_mode, 
+            max_workers=max_workers, 
+            use_multiprocessing=use_parallel
+        )
+    except ImportError:
+        return "❌ 快速批次優化模組未找到"
+    except Exception as e:
+        return f"❌ 快速批次優化錯誤: {str(e)}"
+
+def run_fast_single_analysis(stock_name, speed_mode, db_obj):
+    """執行快速單一股票分析"""
+    if not db_obj:
+        return "❌ 資料庫未連接", None
+    
+    if not stock_name or "請" in stock_name or "錯誤" in stock_name:
+        return "⚠️ 請選擇有效的股票", None
+    
+    try:
+        from fast_ga_optimizer import fast_optimize
+        from report_generator import save_evolution_plot
+        import os
+        
+        # 載入股票數據
+        data = db_obj.read_stock_data(stock_name)
+        if data.empty:
+            return f"❌ 股票 {stock_name} 無數據", None
+        
+        # 獲取股票資訊
+        stock_code = db_obj.extract_stock_code_from_table_name(stock_name)
+        info = db_obj.get_stock_info(stock_code)
+        industry = info['Industry'] if info else "未知"
+        stock_display_name = info['StockName'] if info else "未知"
+        
+        # 快速優化
+        print(f"🚀 啟動快速優化: {stock_name} (模式: {speed_mode})")
+        import time
+        start_time = time.time()
+        
+        best_result = fast_optimize(data, speed_mode)
+        
+        elapsed_time = time.time() - start_time
+        
+        # 保存結果
+        db_obj.save_best_params(stock_name, best_result, industry)
+        
+        # 生成結果報告
+        speed_info = {
+            'ultra_fast': '⚡ 超高速模式',
+            'fast': '🚀 快速模式',
+            'balanced': '⚖️ 平衡模式',
+            'quality': '🎯 品質模式'
+        }
+        
+        result_text = f"""🚀 快速分析完成！
+
+📊 **股票資訊**
+股票代碼: {stock_code}
+股票名稱: {stock_display_name}
+所屬產業: {industry}
+總資料筆數: {len(data)} 筆
+
+⚡ **快速優化設定**
+優化模式: {speed_info.get(speed_mode, speed_mode)}
+執行時間: {elapsed_time:.1f} 秒
+
+📈 **最佳結果**
+適應度: {best_result.fitness:.4f}
+總利潤: {best_result.total_profit:.2f}%
+勝率: {best_result.win_rate:.1%} 
+最大回撤: {best_result.max_drawdown:.1%}
+夏普比率: {best_result.sharpe_ratio:.4f}
+
+🔧 **最佳交易參數**
+區間數: {best_result.parameters.m_intervals}
+持有天數: {best_result.parameters.hold_days}
+目標利潤比例: {best_result.parameters.target_profit_ratio*100:.2f}%
+門檻α: {best_result.parameters.alpha:.1f}%
+
+✅ 結果已保存至資料庫！
+"""
+        
+        return result_text, None
+        
+    except Exception as e:
+        return f"❌ 快速分析錯誤: {str(e)}", None
+
 def get_database_status(db_obj):
     """獲取詳細的資料庫狀態"""
     if not db_obj:
@@ -354,25 +469,202 @@ def create_full_interface():
                 gr.Markdown("### ❌ 系統無法啟動")
                 gr.Markdown("請檢查資料庫連接和模組安裝")
 
+        with gr.Tab("⚡ 快速分析"):
+            if modules_ok:
+                with gr.Row():
+                    with gr.Column():
+                        gr.Markdown("### 🚀 單一股票快速分析")
+                        
+                        # 產業和股票選擇
+                        fast_industry_dropdown = gr.Dropdown(
+                            choices=["請選擇產業"] + industries,
+                            value="請選擇產業",
+                            label="🏭 選擇產業"
+                        )
+                        fast_stock_dropdown = gr.Dropdown(
+                            choices=[],
+                            value=None,
+                            label="📊 選擇股票"
+                        )
+                        
+                        # 速度模式選擇
+                        speed_mode_dropdown = gr.Dropdown(
+                            choices=[
+                                ("⚡ 超高速模式 (約30秒)", "ultra_fast"),
+                                ("🚀 快速模式 (約1分鐘)", "fast"),
+                                ("⚖️ 平衡模式 (約2分鐘)", "balanced"),
+                                ("🎯 品質模式 (約3分鐘)", "quality")
+                            ],
+                            value="fast",
+                            label="⚡ 選擇速度模式"
+                        )
+                        
+                        fast_analyze_btn = gr.Button("⚡ 開始快速分析", size="lg", variant="primary")
+                        fast_result_textbox = gr.Textbox(label="📊 快速分析結果", lines=15)
+                        
+                        def update_fast_stocks(industry):
+                            return get_stocks_for_industry(industry, db_obj)
+                        
+                        def run_fast_analysis(stock, speed_mode):
+                            return run_fast_single_analysis(stock, speed_mode, db_obj)
+                        
+                        fast_industry_dropdown.change(
+                            update_fast_stocks,
+                            inputs=[fast_industry_dropdown],
+                            outputs=[fast_stock_dropdown]
+                        )
+                        
+                        fast_analyze_btn.click(
+                            run_fast_analysis,
+                            inputs=[fast_stock_dropdown, speed_mode_dropdown],
+                            outputs=[fast_result_textbox]
+                        )
+                    
+                    with gr.Column():
+                        gr.Markdown("### ⚡ 速度模式說明")
+                        gr.Markdown("""
+**⚡ 超高速模式 (ultra_fast)**
+- ⏱️ 執行時間: ~30秒
+- 🧬 族群大小: 20
+- 🔄 世代數: 30
+- 🎯 適用: 快速測試、初步評估
+
+**🚀 快速模式 (fast)**
+- ⏱️ 執行時間: ~1分鐘
+- 🧬 族群大小: 30
+- 🔄 世代數: 50
+- 🎯 適用: 日常使用、快速決策
+
+**⚖️ 平衡模式 (balanced)**
+- ⏱️ 執行時間: ~2分鐘
+- 🧬 族群大小: 40
+- 🔄 世代數: 75
+- 🎯 適用: 平衡速度與品質
+
+**🎯 品質模式 (quality)**
+- ⏱️ 執行時間: ~3分鐘
+- 🧬 族群大小: 50
+- 🔄 世代數: 100
+- 🎯 適用: 高品質分析
+
+**🚀 加速技術:**
+- 並行適應度評估
+- 自適應突變率
+- 精英選擇策略
+- 早期停止條件
+- 智能收斂檢測
+                        """)
+            else:
+                gr.Markdown("### ❌ 快速分析不可用")
+
         with gr.Tab("🔄 批次分析"):
             if modules_ok:
-                batch_industry_choices = ["全部"] + industries
-                batch_industry_dropdown = gr.Dropdown(
-                    choices=batch_industry_choices,
-                    value="全部",
-                    label="🏭 選擇批次分析的產業"
-                )
-                batch_result = gr.Textbox(label="📋 批次分析結果", lines=15)
-                batch_btn = gr.Button("🔄 開始批次分析", size="lg")
+                with gr.Row():
+                    with gr.Column():
+                        gr.Markdown("### 🏭 產業別批次分析")
+                        batch_industry_choices = ["全部"] + industries
+                        batch_industry_dropdown = gr.Dropdown(
+                            choices=batch_industry_choices,
+                            value="全部",
+                            label="選擇批次分析的產業"
+                        )
+                        batch_result = gr.Textbox(label="📋 產業批次分析結果", lines=15)
+                        batch_btn = gr.Button("🔄 開始產業批次分析", size="lg")
+                        
+                        def run_batch(industry):
+                            return run_batch_analysis(industry, db_obj)
+                        
+                        batch_btn.click(
+                            run_batch,
+                            inputs=[batch_industry_dropdown],
+                            outputs=[batch_result]
+                        )
+                    
+                    with gr.Column():
+                        gr.Markdown("### 🎯 指定股票批次分析")
+                        gr.Markdown("分析以下49檔重點股票：")
+                        gr.Markdown("""
+                        **金融業：** 富邦金、國泰金、中信金、兆豐金、玉山金、元大金、開發金、華南金、台新金、新光金、合庫金、國票金、上海商銀、第一金
+                        
+                        **科技業：** 台積電、鴻海、聯發科、台達電、廣達、日月光投控、華碩、聯詠、和碩、研華、緯創
+                        
+                        **傳統產業：** 台塑、南亞、統一、台泥、亞泥、華新、中鋼、大成、中租-KY、遠東新、台塑化、台灣大、豐泰、寶成、和泰車、大聯大、陽明、萬海、永豐餘、統一超、卜蜂、美利達、南電、中保科
+                        """)
+                        
+                        specific_action_dropdown = gr.Dropdown(
+                            choices=["檢查可用股票", "開始批次優化"],
+                            value="檢查可用股票",
+                            label="選擇操作"
+                        )
+                        specific_result = gr.Textbox(label="📋 指定股票批次結果", lines=15)
+                        specific_btn = gr.Button("🎯 執行指定股票批次", size="lg")
+                        
+                        def run_specific_batch(action):
+                            return run_specific_stocks_batch(action, db_obj)
+                        
+                        specific_btn.click(
+                            run_specific_batch,
+                            inputs=[specific_action_dropdown],
+                            outputs=[specific_result]
+                        )
                 
-                def run_batch(industry):
-                    return run_batch_analysis(industry, db_obj)
+                # 添加快速批次處理區域
+                gr.Markdown("---")
+                gr.Markdown("### ⚡ 快速批次處理")
                 
-                batch_btn.click(
-                    run_batch,
-                    inputs=[batch_industry_dropdown],
-                    outputs=[batch_result]
-                )
+                with gr.Row():
+                    with gr.Column():
+                        gr.Markdown("**🚀 指定股票快速批次優化**")
+                        
+                        batch_speed_dropdown = gr.Dropdown(
+                            choices=[
+                                ("⚡ 超高速批次 (總計約25分鐘)", "ultra_fast"),
+                                ("🚀 快速批次 (總計約50分鐘)", "fast"),
+                                ("⚖️ 平衡批次 (總計約1.5小時)", "balanced"),
+                                ("🎯 品質批次 (總計約2.5小時)", "quality")
+                            ],
+                            value="fast",
+                            label="選擇批次速度模式"
+                        )
+                        
+                        use_parallel_checkbox = gr.Checkbox(
+                            value=True,
+                            label="🔄 啟用並行處理 (建議開啟)"
+                        )
+                        
+                        fast_batch_result = gr.Textbox(label="📋 快速批次處理結果", lines=15)
+                        fast_batch_btn = gr.Button("⚡ 開始快速批次優化", size="lg", variant="secondary")
+                        
+                        def run_fast_batch(speed_mode, use_parallel):
+                            return run_fast_batch_optimization(speed_mode, use_parallel, db_obj)
+                        
+                        fast_batch_btn.click(
+                            run_fast_batch,
+                            inputs=[batch_speed_dropdown, use_parallel_checkbox],
+                            outputs=[fast_batch_result]
+                        )
+                    
+                    with gr.Column():
+                        gr.Markdown("**⚡ 快速批次處理說明**")
+                        gr.Markdown("""
+**時間預估 (49檔股票):**
+- ⚡ 超高速: ~25分鐘 (平均30秒/檔)
+- 🚀 快速: ~50分鐘 (平均1分鐘/檔)  
+- ⚖️ 平衡: ~1.5小時 (平均2分鐘/檔)
+- 🎯 品質: ~2.5小時 (平均3分鐘/檔)
+
+**🚀 加速技術:**
+- 多進程並行處理
+- 自適應參數優化
+- 早期停止條件
+- 精英選擇策略
+
+**💡 建議:**
+- 首次使用建議選擇「快速模式」
+- 開啟並行處理可大幅縮短時間
+- 超高速模式適合快速測試
+- 品質模式適合正式分析
+                        """)
             else:
                 gr.Markdown("### ❌ 批次分析不可用")
 

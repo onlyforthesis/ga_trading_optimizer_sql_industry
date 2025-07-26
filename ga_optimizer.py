@@ -160,7 +160,8 @@ class GeneticAlgorithm:
                     fitness=-10,
                     total_profit=0,
                     win_rate=0,
-                    max_drawdown=1.0
+                    max_drawdown=1.0,
+                    sharpe_ratio=0.0
                 )
             
             # 複製資料並檢查必要欄位
@@ -179,7 +180,8 @@ class GeneticAlgorithm:
                     fitness=-8,
                     total_profit=0,
                     win_rate=0,
-                    max_drawdown=1.0
+                    max_drawdown=1.0,
+                    sharpe_ratio=0.0
                 )
             
             # 確定價格欄位（嘗試不同的可能名稱）
@@ -202,7 +204,8 @@ class GeneticAlgorithm:
                         fitness=-10,
                         total_profit=0,
                         win_rate=0,
-                        max_drawdown=1.0
+                        max_drawdown=1.0,
+                        sharpe_ratio=0.0
                     )
             
             # 確保價格欄位為數值型
@@ -216,7 +219,8 @@ class GeneticAlgorithm:
                     fitness=-10,
                     total_profit=0,
                     win_rate=0,
-                    max_drawdown=1.0
+                    max_drawdown=1.0,
+                    sharpe_ratio=0.0
                 )
             
             # 確保資料中沒有NaN值
@@ -228,7 +232,8 @@ class GeneticAlgorithm:
                     fitness=-5,
                     total_profit=0,
                     win_rate=0,
-                    max_drawdown=1.0
+                    max_drawdown=1.0,
+                    sharpe_ratio=0.0
                 )
             
             # 計算移動平均
@@ -263,7 +268,8 @@ class GeneticAlgorithm:
                     fitness=-3,  # 較輕的懲罰，讓演算法有機會調整
                     total_profit=0,
                     win_rate=0,
-                    max_drawdown=0.1
+                    max_drawdown=0.1,
+                    sharpe_ratio=0.0
                 )
             
             # 模擬交易
@@ -275,10 +281,12 @@ class GeneticAlgorithm:
             max_drawdown = 0
             peak_value = 1000  # 初始資金
             current_value = 1000
+            daily_returns = []  # 記錄每日收益率用於計算 Sharpe Ratio
             
             for i in range(window, len(data)):  # 從移動平均計算完成後開始
                 current_price = data.iloc[i][price_column]
                 current_signal = data.iloc[i]['signal']
+                previous_value = current_value
                 
                 if pd.isna(current_price) or pd.isna(data.iloc[i]['MA']):
                     continue
@@ -322,12 +330,38 @@ class GeneticAlgorithm:
                         max_drawdown = max(max_drawdown, drawdown)
                         
                         current_position = None
+                
+                # 計算每日收益率（無論是否有交易）
+                daily_return = (current_value - previous_value) / previous_value if previous_value > 0 else 0
+                daily_returns.append(daily_return)
             
             print(f"💹 交易結果: {trades} 筆交易, 勝率 {wins/trades*100 if trades > 0 else 0:.1f}%, 總利潤 {total_profit:.4f}")
             
             # 計算績效指標
             win_rate = wins / trades if trades > 0 else 0
             avg_profit = total_profit / trades if trades > 0 else 0
+            
+            # 計算 Sharpe Ratio
+            sharpe_ratio = 0.0
+            if len(daily_returns) > 1:
+                daily_returns_array = np.array(daily_returns)
+                # 移除無效值
+                daily_returns_array = daily_returns_array[~np.isnan(daily_returns_array)]
+                daily_returns_array = daily_returns_array[~np.isinf(daily_returns_array)]
+                
+                if len(daily_returns_array) > 1:
+                    mean_return = np.mean(daily_returns_array)
+                    std_return = np.std(daily_returns_array, ddof=1)
+                    
+                    if std_return > 0:
+                        # 年化 Sharpe Ratio (假設 252 個交易日)
+                        sharpe_ratio = (mean_return * 252) / (std_return * np.sqrt(252))
+                        
+                    print(f"📊 Sharpe Ratio 計算: 平均日收益 {mean_return:.6f}, 標準差 {std_return:.6f}, Sharpe {sharpe_ratio:.4f}")
+                else:
+                    print("⚠️ 有效收益率數據不足，無法計算 Sharpe Ratio")
+            else:
+                print("⚠️ 收益率數據不足，無法計算 Sharpe Ratio")
             
             # 改進的適應度計算 - 更敏感的多目標優化
             if trades > 0:
@@ -368,7 +402,8 @@ class GeneticAlgorithm:
                 fitness=fitness,
                 total_profit=total_profit * 1000,  # 轉換為實際金額
                 win_rate=win_rate,
-                max_drawdown=max_drawdown
+                max_drawdown=max_drawdown,
+                sharpe_ratio=sharpe_ratio
             )
             
         except Exception as e:
@@ -381,7 +416,8 @@ class GeneticAlgorithm:
                 fitness=-10,
                 total_profit=0,
                 win_rate=0,
-                max_drawdown=1.0
+                max_drawdown=1.0,
+                sharpe_ratio=0.0
             )
     
     def evaluate_on_test_data(self, params: TradingParameters) -> TradingResult:
@@ -393,7 +429,8 @@ class GeneticAlgorithm:
                 fitness=0,
                 total_profit=0,
                 win_rate=0,
-                max_drawdown=0
+                max_drawdown=0,
+                sharpe_ratio=0.0
             )
         
         try:
@@ -417,7 +454,8 @@ class GeneticAlgorithm:
                 fitness=-10,
                 total_profit=0,
                 win_rate=0,
-                max_drawdown=1.0
+                max_drawdown=1.0,
+                sharpe_ratio=0.0
             )
     
     def crossover(self, parent1: TradingParameters, parent2: TradingParameters) -> TradingParameters:
