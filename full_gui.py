@@ -362,6 +362,165 @@ def get_database_status(db_obj):
     except Exception as e:
         return f"❌ 讀取資料庫資訊失敗: {str(e)}"
 
+def get_enhanced_system_status(db_obj):
+    """獲取增強的系統狀態 (包含硬體資訊)"""
+    try:
+        import psutil
+        import platform
+        import sys
+        import datetime
+        import subprocess
+        
+        # 獲取資料庫狀態
+        db_status = get_database_status(db_obj)
+        
+        # 獲取硬體狀態
+        hardware_status = "\n" + "="*50 + "\n"
+        hardware_status += "🖥️ **硬體系統資訊**\n\n"
+        
+        # 平台資訊
+        hardware_status += "💻 **系統平台**\n"
+        hardware_status += f"   • 作業系統: {platform.system()} {platform.release()}\n"
+        hardware_status += f"   • 架構: {platform.architecture()[0]}\n"
+        hardware_status += f"   • 處理器: {platform.processor()}\n"
+        hardware_status += f"   • 電腦名稱: {platform.node()}\n"
+        
+        # 開機時間
+        try:
+            boot_time = datetime.datetime.fromtimestamp(psutil.boot_time())
+            uptime = datetime.datetime.now() - boot_time
+            hardware_status += f"   • 開機時間: {boot_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            hardware_status += f"   • 運行時間: {str(uptime).split('.')[0]}\n"
+        except:
+            pass
+        
+        hardware_status += "\n"
+        
+        # CPU 資訊
+        hardware_status += "🔥 **CPU 資訊**\n"
+        try:
+            cpu_count_physical = psutil.cpu_count(logical=False)
+            cpu_count_logical = psutil.cpu_count(logical=True)
+            cpu_percent = psutil.cpu_percent(interval=1)
+            
+            hardware_status += f"   • 物理核心: {cpu_count_physical}\n"
+            hardware_status += f"   • 邏輯核心: {cpu_count_logical}\n"
+            hardware_status += f"   • CPU 使用率: {cpu_percent}%\n"
+            
+            # CPU 頻率
+            try:
+                cpu_freq = psutil.cpu_freq()
+                if cpu_freq:
+                    hardware_status += f"   • 目前頻率: {cpu_freq.current:.0f} MHz\n"
+                    hardware_status += f"   • 最大頻率: {cpu_freq.max:.0f} MHz\n"
+            except:
+                pass
+        except Exception as e:
+            hardware_status += f"   • CPU 資訊錯誤: {str(e)}\n"
+        
+        hardware_status += "\n"
+        
+        # 記憶體資訊
+        hardware_status += "💾 **記憶體資訊**\n"
+        try:
+            memory = psutil.virtual_memory()
+            swap = psutil.swap_memory()
+            
+            hardware_status += f"   • 總容量: {round(memory.total / (1024**3), 2)} GB\n"
+            hardware_status += f"   • 已使用: {round(memory.used / (1024**3), 2)} GB ({memory.percent}%)\n"
+            hardware_status += f"   • 可用: {round(memory.available / (1024**3), 2)} GB\n"
+            hardware_status += f"   • 虛擬記憶體: {round(swap.used / (1024**3), 2)} / {round(swap.total / (1024**3), 2)} GB\n"
+        except Exception as e:
+            hardware_status += f"   • 記憶體資訊錯誤: {str(e)}\n"
+        
+        hardware_status += "\n"
+        
+        # GPU 資訊 (Windows)
+        hardware_status += "🎮 **GPU 資訊**\n"
+        try:
+            if platform.system() == 'Windows':
+                result = subprocess.run([
+                    'wmic', 'path', 'win32_VideoController', 'get', 
+                    'name,AdapterRAM', '/format:csv'
+                ], capture_output=True, text=True, timeout=10)
+                
+                if result.returncode == 0:
+                    lines = result.stdout.strip().split('\n')[1:]
+                    gpu_found = False
+                    
+                    for i, line in enumerate(lines):
+                        if line.strip():
+                            parts = line.split(',')
+                            if len(parts) >= 3:
+                                name = parts[2] if len(parts) > 2 else 'Unknown'
+                                memory = parts[1] if len(parts) > 1 else 'Unknown'
+                                
+                                if name != 'Unknown' and name.strip():
+                                    hardware_status += f"   • GPU {i}: {name.strip()}\n"
+                                    
+                                    if memory != 'Unknown' and memory.strip():
+                                        try:
+                                            memory_gb = int(memory) / (1024**3)
+                                            hardware_status += f"     - 記憶體: {memory_gb:.1f} GB\n"
+                                        except:
+                                            pass
+                                    
+                                    gpu_found = True
+                    
+                    if not gpu_found:
+                        hardware_status += "   • 無法檢測到 GPU 資訊\n"
+                else:
+                    hardware_status += "   • GPU 檢測失敗\n"
+            else:
+                hardware_status += "   • 此平台不支援 GPU 檢測\n"
+        except Exception as e:
+            hardware_status += f"   • GPU 資訊錯誤: {str(e)}\n"
+        
+        hardware_status += "\n"
+        
+        # 磁碟資訊
+        hardware_status += "💽 **磁碟資訊**\n"
+        try:
+            partitions = psutil.disk_partitions()
+            for partition in partitions[:3]:  # 只顯示前3個分區
+                try:
+                    partition_usage = psutil.disk_usage(partition.mountpoint)
+                    total_gb = round(partition_usage.total / (1024**3), 2)
+                    used_gb = round(partition_usage.used / (1024**3), 2)
+                    free_gb = round(partition_usage.free / (1024**3), 2)
+                    usage_percent = round((partition_usage.used / partition_usage.total) * 100, 2)
+                    
+                    hardware_status += f"   • {partition.device} ({partition.fstype})\n"
+                    hardware_status += f"     - 容量: {used_gb} / {total_gb} GB ({usage_percent}%)\n"
+                    hardware_status += f"     - 可用: {free_gb} GB\n"
+                except PermissionError:
+                    continue
+        except Exception as e:
+            hardware_status += f"   • 磁碟資訊錯誤: {str(e)}\n"
+        
+        hardware_status += "\n"
+        
+        # Python 環境資訊
+        hardware_status += "🐍 **Python 環境**\n"
+        try:
+            version_line = sys.version.split('\n')[0]
+            hardware_status += f"   • 版本: {version_line}\n"
+            hardware_status += f"   • 執行路徑: {sys.executable}\n"
+            hardware_status += f"   • 已載入模組: {len(sys.modules)} 個\n"
+        except Exception as e:
+            hardware_status += f"   • Python 環境資訊錯誤: {str(e)}\n"
+        
+        # 結合資料
+        combined_status = f"{db_status}\n{hardware_status}"
+        
+        return combined_status
+        
+    except ImportError as e:
+        # 如果 psutil 不可用，只返回資料庫狀態
+        return get_database_status(db_obj) + f"\n\n⚠️ 硬體監控模組未安裝: {str(e)}"
+    except Exception as e:
+        return f"{get_database_status(db_obj)}\n\n❌ 硬體監控錯誤: {str(e)}"
+
 def create_full_interface():
     """創建完整功能的界面"""
     
@@ -671,18 +830,45 @@ def create_full_interface():
         with gr.Tab("🔍 系統狀態"):
             gr.Markdown("### 📊 系統詳細資訊")
             
+            # 添加系統摘要顯示
+            with gr.Row():
+                with gr.Column():
+                    try:
+                        import psutil
+                        cpu_percent = psutil.cpu_percent(interval=0.1)
+                        memory = psutil.virtual_memory()
+                        system_summary = f"💻 CPU: {cpu_percent}% | 💾 記憶體: {memory.percent}% ({round(memory.used / (1024**3), 1)}/{round(memory.total / (1024**3), 1)} GB)"
+                    except:
+                        system_summary = "💻 硬體監控模組未安裝"
+                    
+                    gr.Markdown(f"**🖥️ 系統摘要:** {system_summary}")
+            
+            # 詳細系統狀態
             status_textbox = gr.Textbox(
-                label="🔗 系統狀態", 
-                lines=15, 
-                value=get_database_status(db_obj)
+                label="🔗 完整系統狀態", 
+                lines=25, 
+                value=get_enhanced_system_status(db_obj),
+                max_lines=30
             )
-            refresh_btn = gr.Button("🔄 重新整理狀態")
+            
+            with gr.Row():
+                refresh_btn = gr.Button("🔄 重新整理狀態", variant="primary")
+                refresh_hardware_btn = gr.Button("🖥️ 刷新硬體資訊", variant="secondary")
             
             def refresh_status():
-                return get_database_status(db_obj)
+                return get_enhanced_system_status(db_obj)
+            
+            def refresh_hardware():
+                # 直接返回增強的系統狀態
+                return get_enhanced_system_status(db_obj)
             
             refresh_btn.click(
                 refresh_status,
+                outputs=[status_textbox]
+            )
+            
+            refresh_hardware_btn.click(
+                refresh_hardware,
                 outputs=[status_textbox]
             )
     
