@@ -1,4 +1,4 @@
-# 🚀 基因演算法股票策略最佳化系統
+# 🚀 GAPPTS股票策略最佳化系統
 
 [![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://python.org)
 [![SQL Server](https://img.shields.io/badge/database-SQL%20Server-red.svg)](https://www.microsoft.com/sql-server)
