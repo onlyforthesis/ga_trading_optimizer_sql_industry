@@ -16,6 +16,12 @@ def test_and_import_modules():
         from ga_optimizer import GeneticAlgorithm, TradingParameters, TradingResult
         from report_generator import save_evolution_plot
         
+        # 嘗試導入買進持有分析模組
+        try:
+            from buy_hold_analysis import analyze_multiple_periods
+        except ImportError:
+            print("⚠️ 買進持有分析模組未找到，部分功能將不可用")
+        
         # 嘗試連接資料庫
         db = DBConnector()
         industries = db.get_industry_list()
@@ -121,6 +127,9 @@ def run_full_ga_analysis(stock_name, db_obj, progress=gr.Progress()):
         
         progress(1.0, desc="分析完成！")
         
+        # 計算買進持有策略報酬
+        buy_hold_return = calculate_buy_and_hold_return(db_obj, stock_name)
+        
         # 格式化結果
         train_data_info = f"訓練數據: {len(ga.train_data)} 筆 (2019-2023)"
         test_data_info = f"測試數據: {len(ga.test_data)} 筆 (2024)" if not ga.test_data.empty else "測試數據: 無"
@@ -128,9 +137,9 @@ def run_full_ga_analysis(stock_name, db_obj, progress=gr.Progress()):
         result_text = f"""🎉 基因演算法分析完成！
 
 📊 **股票資訊**
-股票代碼: {stock_code}
 股票名稱: {stock_display_name}
 所屬產業: {industry}
+買進持有策略報酬: {buy_hold_return}
 總資料筆數: {len(data)} 筆
 {train_data_info}
 {test_data_info}
@@ -281,6 +290,9 @@ def run_fast_single_analysis(stock_name, speed_mode, db_obj):
         db_obj.save_best_params(stock_name, best_result, industry)
         
         # 生成結果報告
+        # 計算買進持有策略報酬
+        buy_hold_return = calculate_buy_and_hold_return(db_obj, stock_name)
+        
         speed_info = {
             'ultra_fast': '⚡ 超高速模式',
             'fast': '🚀 快速模式',
@@ -291,9 +303,9 @@ def run_fast_single_analysis(stock_name, speed_mode, db_obj):
         result_text = f"""🚀 快速分析完成！
 
 📊 **股票資訊**
-股票代碼: {stock_code}
 股票名稱: {stock_display_name}
 所屬產業: {industry}
+買進持有策略報酬: {buy_hold_return}
 總資料筆數: {len(data)} 筆
 
 ⚡ **快速優化設定**
@@ -320,6 +332,223 @@ def run_fast_single_analysis(stock_name, speed_mode, db_obj):
         
     except Exception as e:
         return f"❌ 快速分析錯誤: {str(e)}", None
+
+def get_analysis_results(db_obj, industry_filter="全部"):
+    """獲取所有分析結果並格式化為表格"""
+    if not db_obj:
+        return []
+    
+    try:
+        # 確保 BestParameters 表存在
+        db_obj.create_best_params_table()
+        
+        # 基本查詢
+        if industry_filter == "全部":
+            query = """
+            SELECT 
+                StockName,
+                Industry,
+                TotalProfit,
+                TotalProfit as annual_return,
+                MaxDrawdown,
+                SharpeRatio,
+                WinRate,
+                CreateTime
+            FROM BestParameters 
+            ORDER BY CreateTime DESC
+            """
+        else:
+            query = """
+            SELECT 
+                StockName,
+                Industry,
+                TotalProfit,
+                TotalProfit as annual_return,
+                MaxDrawdown,
+                SharpeRatio,
+                WinRate,
+                CreateTime
+            FROM BestParameters 
+            WHERE Industry = ?
+            ORDER BY CreateTime DESC
+            """
+        
+        # 執行查詢
+        if industry_filter == "全部":
+            results = db_obj.execute_query(query)
+        else:
+            results = db_obj.execute_query(query, (industry_filter,))
+        
+        if not results:
+            print("沒有找到分析結果，可能尚未進行任何分析")
+            return []
+        
+        # 格式化結果
+        formatted_results = []
+        for row in results:
+            stock_name = row[0]
+            industry = row[1]
+            total_profit = row[2] if row[2] is not None else 0
+            annual_return = row[3] if row[3] is not None else 0
+            max_drawdown = row[4] if row[4] is not None else 0
+            sharpe_ratio = row[5] if row[5] is not None else 0
+            win_rate = row[6] if row[6] is not None else 0
+            
+            # 計算買進持有策略報酬
+            buy_hold_return = calculate_buy_and_hold_return(db_obj, stock_name)
+            
+            formatted_results.append([
+                stock_name,  # 股票名稱
+                buy_hold_return,  # 買進持有策略報酬
+                f"{total_profit:.2f}%",  # 總報酬率
+                f"{annual_return:.2f}%",  # 年化報酬率
+                f"{max_drawdown:.2f}%",  # 最大回撤
+                f"{sharpe_ratio:.4f}",  # 夏普比率
+                f"{win_rate:.1f}%",  # 勝率
+                industry  # 所屬產業
+            ])
+        
+        return formatted_results
+        
+    except Exception as e:
+        print(f"查詢分析結果錯誤: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+def calculate_buy_and_hold_return(db_obj, stock_name):
+    """計算買進持有策略報酬"""
+    try:
+        # 從表名提取股票代號  
+        stock_code = db_obj.extract_stock_code_from_table_name(stock_name)
+        
+        # 先嘗試使用英文欄位名
+        try:
+            # 獲取測試期間的數據 (2024年) - 使用英文欄位名，注意 Close 是保留字需要用方括號
+            query = f"""
+            SELECT TOP 1 [Close] as first_close
+            FROM [{stock_name}]
+            WHERE [Date] >= '2024-01-01'
+            ORDER BY [Date] ASC
+            """
+            
+            first_result = db_obj.execute_query(query)
+            if not first_result or len(first_result) == 0:
+                return "N/A"
+            
+            first_close = first_result[0][0]
+            
+            # 獲取最後一天的收盤價
+            query = f"""
+            SELECT TOP 1 [Close] as last_close
+            FROM [{stock_name}]
+            WHERE [Date] >= '2024-01-01'
+            ORDER BY [Date] DESC
+            """
+            
+            last_result = db_obj.execute_query(query)
+            if not last_result or len(last_result) == 0:
+                return "N/A"
+            
+            last_close = last_result[0][0]
+            
+        except:
+            # 如果英文欄位名失敗，嘗試中文欄位名
+            try:
+                query = f"""
+                SELECT TOP 1 [收盤價] as first_close
+                FROM [{stock_name}]
+                WHERE [日期] >= '2024-01-01'
+                ORDER BY [日期] ASC
+                """
+                
+                first_result = db_obj.execute_query(query)
+                if not first_result or len(first_result) == 0:
+                    return "N/A"
+                
+                first_close = first_result[0][0]
+                
+                # 獲取最後一天的收盤價
+                query = f"""
+                SELECT TOP 1 [收盤價] as last_close
+                FROM [{stock_name}]
+                WHERE [日期] >= '2024-01-01'
+                ORDER BY [日期] DESC
+                """
+                
+                last_result = db_obj.execute_query(query)
+                if not last_result or len(last_result) == 0:
+                    return "N/A"
+                
+                last_close = last_result[0][0]
+                
+            except:
+                # 如果都失敗，嘗試檢查表格結構並使用實際的欄位名
+                try:
+                    # 查詢表格結構
+                    schema_query = f"""
+                    SELECT COLUMN_NAME 
+                    FROM INFORMATION_SCHEMA.COLUMNS 
+                    WHERE TABLE_NAME = '{stock_name}'
+                    AND (COLUMN_NAME LIKE '%close%' OR COLUMN_NAME LIKE '%收盤%' OR COLUMN_NAME LIKE '%Close%')
+                    """
+                    
+                    close_columns = db_obj.execute_query(schema_query)
+                    
+                    date_query = f"""
+                    SELECT COLUMN_NAME 
+                    FROM INFORMATION_SCHEMA.COLUMNS 
+                    WHERE TABLE_NAME = '{stock_name}'
+                    AND (COLUMN_NAME LIKE '%date%' OR COLUMN_NAME LIKE '%日期%' OR COLUMN_NAME LIKE '%Date%')
+                    """
+                    
+                    date_columns = db_obj.execute_query(date_query)
+                    
+                    if close_columns and date_columns:
+                        close_col = close_columns[0][0]
+                        date_col = date_columns[0][0]
+                        
+                        # 使用檢測到的欄位名
+                        query = f"""
+                        SELECT TOP 1 [{close_col}] as first_close
+                        FROM [{stock_name}]
+                        WHERE [{date_col}] >= '2024-01-01'
+                        ORDER BY [{date_col}] ASC
+                        """
+                        
+                        first_result = db_obj.execute_query(query)
+                        if not first_result or len(first_result) == 0:
+                            return "N/A"
+                        
+                        first_close = first_result[0][0]
+                        
+                        query = f"""
+                        SELECT TOP 1 [{close_col}] as last_close
+                        FROM [{stock_name}]
+                        WHERE [{date_col}] >= '2024-01-01'
+                        ORDER BY [{date_col}] DESC
+                        """
+                        
+                        last_result = db_obj.execute_query(query)
+                        if not last_result or len(last_result) == 0:
+                            return "N/A"
+                        
+                        last_close = last_result[0][0]
+                    else:
+                        return "N/A"
+                except:
+                    return "N/A"
+        
+        # 計算報酬率
+        if first_close and last_close and first_close > 0:
+            return_rate = (last_close - first_close) / first_close
+            return f"{return_rate * 100:.2f}%"
+        else:
+            return "N/A"
+            
+    except Exception as e:
+        print(f"計算買進持有報酬錯誤 ({stock_name}): {e}")
+        return "N/A"
 
 def get_database_status(db_obj):
     """獲取詳細的資料庫狀態"""
@@ -827,7 +1056,44 @@ def create_full_interface():
             else:
                 gr.Markdown("### ❌ 批次分析不可用")
 
-        with gr.Tab("🔍 系統狀態"):
+        with gr.Tab("� 結果查詢"):
+            if modules_ok:
+                gr.Markdown("### 📋 所有分析結果")
+                
+                with gr.Row():
+                    with gr.Column():
+                        # 產業篩選
+                        result_industry_dropdown = gr.Dropdown(
+                            choices=["全部"] + industries,
+                            value="全部",
+                            label="🏭 篩選產業"
+                        )
+                        
+                        # 查詢按鈕
+                        query_btn = gr.Button("🔍 查詢結果", size="lg", variant="primary")
+                
+                # 結果表格
+                with gr.Row():
+                    results_dataframe = gr.Dataframe(
+                        headers=["股票名稱", "買進持有策略報酬", "總報酬率", "年化報酬率", "最大回撤", "夏普比率", "勝率", "所屬產業"],
+                        datatype=["str", "str", "str", "str", "str", "str", "str", "str"],
+                        label="📈 分析結果總覽",
+                        interactive=False,
+                        wrap=True
+                    )
+                
+                def query_results(industry_filter):
+                    return get_analysis_results(db_obj, industry_filter)
+                
+                query_btn.click(
+                    query_results,
+                    inputs=[result_industry_dropdown],
+                    outputs=[results_dataframe]
+                )
+            else:
+                gr.Markdown("### ❌ 結果查詢不可用")
+
+        with gr.Tab("�🔍 系統狀態"):
             gr.Markdown("### 📊 系統詳細資訊")
             
             # 添加系統摘要顯示
@@ -873,6 +1139,31 @@ def create_full_interface():
             )
     
     return demo
+
+def run_detailed_buy_hold_analysis(stock, db_obj):
+    """執行詳細的買進持有策略分析"""
+    if not db_obj:
+        return "❌ 資料庫未連接，無法執行分析"
+    
+    if not stock or stock == "請選擇股票":
+        return "⚠️ 請先選擇股票"
+    
+    try:
+        # 導入買進持有分析模組
+        from buy_hold_analysis import analyze_multiple_periods
+        
+        # 提取股票代碼 (格式: "1101 台泥" -> "1101")
+        stock_code = stock.split()[0] if stock else ""
+        
+        # 執行多區間分析
+        analysis_result = analyze_multiple_periods(stock_code, db_obj)
+        
+        return analysis_result
+        
+    except ImportError:
+        return "❌ 買進持有分析模組未找到，請確認 buy_hold_analysis.py 檔案存在"
+    except Exception as e:
+        return f"❌ 分析執行錯誤: {str(e)}"
 
 # 創建完整界面
 demo = create_full_interface()

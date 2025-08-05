@@ -129,3 +129,31 @@ class DBConnector:
                   result.parameters.alpha, result.total_profit, result.win_rate, result.max_drawdown, result.sharpe_ratio, result.fitness)
         self.conn.cursor().execute(query, params)
         self.conn.commit()
+
+    def execute_query(self, query, params=None):
+        """執行SQL查詢並返回結果"""
+        try:
+            cursor = self.conn.cursor()
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+            
+            # 如果是SELECT查詢，返回結果
+            if query.strip().upper().startswith('SELECT'):
+                return cursor.fetchall()
+            else:
+                # 如果是INSERT/UPDATE/DELETE，提交並返回影響的行數
+                self.conn.commit()
+                return cursor.rowcount
+        except Exception as e:
+            print(f"查詢執行錯誤: {e}")
+            print(f"查詢語句: {query}")
+            if params:
+                print(f"參數: {params}")
+            return None
+
+    @property
+    def connection(self):
+        """返回資料庫連接對象"""
+        return self.conn
